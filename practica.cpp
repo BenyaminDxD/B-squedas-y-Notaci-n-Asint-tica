@@ -1,7 +1,6 @@
 // ============================================================
-// EXPERIMENTO DE BUSQUEDA - Version C++
-// Traduccion directa del script en Python (pandas -> lectura
-// manual de CSV, statistics -> funciones propias).
+// EXPERIMENTO DE BUSQUEDA - Version simplificada en C++
+// Escenario 7: Indice de clientes de comercio electronico
 // ============================================================
 
 #include <iostream>
@@ -11,439 +10,209 @@
 #include <vector>
 #include <algorithm>
 #include <chrono>
-#include <limits>
-#include <iomanip>
-#include <map>
 
 using namespace std;
 using namespace std::chrono;
 
-// ============================================================
-// 1. UTILIDADES DE LECTURA DE CSV
-// ============================================================
+// ---------- Busquedas ----------
 
-// Separa una linea de CSV respetando comillas dobles (algunos
-// campos, como "Description", contienen comas dentro de comillas).
-static vector<string> parsearLineaCSV(const string& linea) {
+int busquedaLineal(const vector<long long>& a, long long x, long long& ops) {
+    ops = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        ++ops;
+        if (a[i] == x) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int busquedaBinaria(const vector<long long>& a, long long x, long long& ops) {
+    int izq = 0, der = static_cast<int>(a.size()) - 1;
+    ops = 0;
+    while (izq <= der) {
+        int medio = izq + (der - izq) / 2;
+        ++ops;
+        if (a[medio] == x) return medio;
+        if (a[medio] < x) izq = medio + 1;
+        else der = medio - 1;
+    }
+    return -1;
+}
+
+// ---------- Utilidades de lectura de CSV ----------
+
+vector<string> parsearLinea(const string& linea) {
     vector<string> campos;
     string actual;
     bool dentroComillas = false;
-
     for (size_t i = 0; i < linea.size(); i++) {
         char c = linea[i];
-
-        if (c == '"') {
-            dentroComillas = !dentroComillas;
-        } else if (c == ',' && !dentroComillas) {
-            campos.push_back(actual);
-            actual.clear();
-        } else {
-            actual += c;
-        }
+        if (c == '"') dentroComillas = !dentroComillas;
+        else if (c == ',' && !dentroComillas) { campos.push_back(actual); actual.clear(); }
+        else actual += c;
     }
     campos.push_back(actual);
-
     return campos;
 }
 
-// Quita espacios y retorno de carro al final de un string
-static string limpiar(const string& s) {
-    string r = s;
-    while (!r.empty() && (r.back() == '\r' || r.back() == '\n' || r.back() == ' ')) {
-        r.pop_back();
-    }
-    return r;
+string limpiar(string s) {
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ')) s.pop_back();
+    return s;
 }
 
-// ============================================================
-// 2. CARGAR EL ARCHIVO CSV (columna CustomerID)
-// ============================================================
-
-vector<double> cargarCustomerID(const string& rutaArchivo, long long& totalRegistros) {
-    ifstream archivo(rutaArchivo);
-
-    if (!archivo.is_open()) {
-        cerr << "No se pudo abrir el archivo: " << rutaArchivo << endl;
-        exit(1);
-    }
+vector<long long> cargarCustomerID(const string& ruta, long long& totalRegistros) {
+    ifstream archivo(ruta);
+    if (!archivo.is_open()) { cerr << "No se pudo abrir: " << ruta << endl; exit(1); }
 
     string linea;
     getline(archivo, linea);
-    vector<string> encabezado = parsearLineaCSV(linea);
+    vector<string> encabezado = parsearLinea(linea);
 
-    int indiceCustomerID = -1;
+    int col = -1;
     for (size_t i = 0; i < encabezado.size(); i++) {
-        if (limpiar(encabezado[i]) == "CustomerID") {
-            indiceCustomerID = static_cast<int>(i);
-            break;
-        }
+        if (limpiar(encabezado[i]) == "CustomerID") { col = (int)i; break; }
     }
+    if (col == -1) { cerr << "No se encontro columna CustomerID" << endl; exit(1); }
 
-    if (indiceCustomerID == -1) {
-        cerr << "No se encontro la columna CustomerID" << endl;
-        exit(1);
-    }
-
-    vector<double> datos;
+    vector<long long> datos;
     totalRegistros = 0;
-
     while (getline(archivo, linea)) {
         if (linea.empty()) continue;
-
         totalRegistros++;
-
-        vector<string> campos = parsearLineaCSV(linea);
-        if (indiceCustomerID >= static_cast<int>(campos.size())) continue;
-
-        string valor = limpiar(campos[indiceCustomerID]);
-
-        // Se eliminan solamente los valores vacios.
-        // Los duplicados SE CONSERVAN.
+        vector<string> campos = parsearLinea(linea);
+        if (col >= (int)campos.size()) continue;
+        string valor = limpiar(campos[col]);
         if (valor.empty()) continue;
-
         try {
-            double id = stod(valor);
+            long long id = static_cast<long long>(stod(valor)); // "17850.0" -> 17850
             datos.push_back(id);
-        } catch (...) {
-            // valor no numerico, se ignora
-            continue;
-        }
+        } catch (...) { continue; }
     }
-
     return datos;
 }
 
-// ============================================================
-// 3. BUSQUEDA LINEAL
-// ============================================================
-
-pair<long long, long long> busquedaLineal(const vector<double>& a, double x) {
-    long long ops = 0;
-
-    for (size_t i = 0; i < a.size(); i++) {
-        ops++;
-
-        if (a[i] == x) {
-            return {static_cast<long long>(i), ops};
-        }
-    }
-
-    return {-1, ops};
-}
-
-// ============================================================
-// 4. BUSQUEDA BINARIA
-// ============================================================
-
-pair<long long, long long> busquedaBinaria(const vector<double>& a, double x) {
-    long long izq = 0;
-    long long der = static_cast<long long>(a.size()) - 1;
-    long long ops = 0;
-
-    while (izq <= der) {
-        long long medio = izq + (der - izq) / 2;
-
-        ops++;
-
-        if (a[medio] == x) {
-            return {medio, ops};
-        }
-
-        if (a[medio] < x) {
-            izq = medio + 1;
-        } else {
-            der = medio - 1;
-        }
-    }
-
-    return {-1, ops};
-}
-
-// ============================================================
-// 5. ESTADISTICAS (equivalente a statistics.mean/median/min/max)
-// ============================================================
+// ---------- Estadisticas ----------
 
 double media(const vector<long long>& v) {
-    double suma = 0;
-    for (long long x : v) suma += static_cast<double>(x);
-    return suma / static_cast<double>(v.size());
+    double s = 0;
+    for (size_t i = 0; i < v.size(); i++) s += (double)v[i];
+    return s / v.size();
 }
 
 double mediana(vector<long long> v) {
     sort(v.begin(), v.end());
     size_t n = v.size();
+    if (n % 2 == 1) return (double)v[n / 2];
+    return ((double)v[n / 2 - 1] + (double)v[n / 2]) / 2.0;
+}
 
-    if (n % 2 == 1) {
-        return static_cast<double>(v[n / 2]);
-    } else {
-        return (static_cast<double>(v[n / 2 - 1]) + static_cast<double>(v[n / 2])) / 2.0;
+// ---------- Corre N repeticiones de un algoritmo ----------
+
+struct Medicion {
+    vector<long long> tiempos;
+    vector<long long> comparaciones;
+};
+
+Medicion correrRepeticiones(int algoritmo, const vector<long long>& datos, long long objetivo, int repeticiones) {
+    // algoritmo: 0 = lineal, 1 = binaria
+    Medicion m;
+    for (int r = 0; r < repeticiones; r++) {
+        long long ops = 0;
+        high_resolution_clock::time_point t0 = high_resolution_clock::now();
+        if (algoritmo == 0) busquedaLineal(datos, objetivo, ops);
+        else                busquedaBinaria(datos, objetivo, ops);
+        high_resolution_clock::time_point t1 = high_resolution_clock::now();
+
+        m.tiempos.push_back(duration_cast<nanoseconds>(t1 - t0).count());
+        m.comparaciones.push_back(ops);
     }
+    return m;
 }
 
-long long minimo(const vector<long long>& v) {
-    return *min_element(v.begin(), v.end());
-}
-
-long long maximo(const vector<long long>& v) {
-    return *max_element(v.begin(), v.end());
-}
-
-// ============================================================
-// 6. ESTRUCTURAS PARA GUARDAR RESULTADOS
-// ============================================================
-
-struct FilaCruda {
-    long long n;
-    string escenario;
-    double objetivo;
-    string algoritmo;
-    int repeticion;
-    long long posicion;
-    long long comparaciones;
-    long long tiempoNs;
-};
-
-struct FilaResumen {
-    long long n;
-    string escenario;
-    double objetivo;
-    string algoritmo;
-    double promedioTiempoNs;
-    double medianaTiempoNs;
-    long long minimoTiempoNs;
-    long long maximoTiempoNs;
-    double promedioComparaciones;
-    double medianaComparaciones;
-    long long minimoComparaciones;
-    long long maximoComparaciones;
-    long long tiempoOrdenamientoNs;
-};
-
-// ============================================================
-// 7. PROGRAMA PRINCIPAL
-// ============================================================
+// ---------- Programa principal ----------
 
 int main() {
-    cout << "==============================================" << endl;
-    cout << "       EXPERIMENTO DE BUSQUEDA" << endl;
-    cout << "==============================================" << endl;
+    cout << "EXPERIMENTO DE BUSQUEDA (lineal vs binaria)\n";
 
     long long totalRegistros = 0;
-    vector<double> datos = cargarCustomerID("Online Retail.csv", totalRegistros);
+    vector<long long> datosCompletos = cargarCustomerID("Online Retail.csv", totalRegistros);
+    cout << "Registros totales: " << totalRegistros << " | CustomerID validos: " << datosCompletos.size() << "\n";
 
-    cout << "Total de registros del CSV: " << totalRegistros << endl;
-    cout << "CustomerID validos: " << datos.size() << endl;
-
-    // Tamanos de las muestras
-    vector<long long> tamanos = {100, 1000, 10000, 100000};
-
-    // La guia permite 500000 si el equipo/dataset lo permite.
-    // El CSV no tiene suficientes CustomerID no nulos para
-    // construir n=500000 sin inventar datos.
+    vector<long long> tamanos;
+    tamanos.push_back(100);
+    tamanos.push_back(1000);
+    tamanos.push_back(10000);
+    tamanos.push_back(100000);
+    tamanos.push_back(500000);
 
     const int repeticiones = 30;
 
-    vector<FilaResumen> resultados;
-    vector<FilaCruda> datosCrudos;
+    long long maximoGlobal = *max_element(datosCompletos.begin(), datosCompletos.end());
 
-    double maximoGlobal = *max_element(datos.begin(), datos.end());
+    ofstream crudos("datos_crudos.csv");
+    crudos << "n,escenario,objetivo,algoritmo,tiempo_ns,comparaciones\n";
 
-    for (long long n : tamanos) {
-        cout << "\n\n==============================================" << endl;
-        cout << "TAMANO n = " << n << endl;
-        cout << "==============================================" << endl;
+    ofstream resumen("resumen_estadistico.csv");
+    resumen << "n,escenario,objetivo,algoritmo,prom_tiempo_ns,mediana_tiempo_ns,min_tiempo_ns,max_tiempo_ns,"
+            << "prom_comparaciones,mediana_comparaciones,min_comparaciones,max_comparaciones,tiempo_ordenamiento_ns\n";
 
-        // Misma muestra para los dos algoritmos
-        vector<double> muestra(datos.begin(), datos.begin() + n);
+    for (size_t idxN = 0; idxN < tamanos.size(); idxN++) {
+        long long n = tamanos[idxN];
 
-        // Objetivos
-        double objetivoInicio = muestra.front();
-        double objetivoCentro = muestra[muestra.size() / 2];
-        double objetivoFinal = muestra.back();
-        double objetivoAusente = maximoGlobal + 1;
+        if (n > (long long)datosCompletos.size()) {
+            cout << "\nn = " << n << " omitido: no hay suficientes CustomerID validos.\n";
+            continue;
+        }
 
-        vector<pair<string, double>> objetivos = {
-            {"inicio", objetivoInicio},
-            {"centro", objetivoCentro},
-            {"final", objetivoFinal},
-            {"ausente", objetivoAusente}
-        };
+        cout << "\n--- n = " << n << " ---\n";
+        vector<long long> muestra(datosCompletos.begin(), datosCompletos.begin() + n);
 
-        // Ordenamiento para busqueda binaria
-        auto inicioOrdenamiento = high_resolution_clock::now();
-        vector<double> muestraOrdenada = muestra;
-        sort(muestraOrdenada.begin(), muestraOrdenada.end());
-        auto finOrdenamiento = high_resolution_clock::now();
+        // Version ordenada para la busqueda binaria (tiempo medido aparte)
+        high_resolution_clock::time_point ti = high_resolution_clock::now();
+        vector<long long> ordenada = muestra;
+        sort(ordenada.begin(), ordenada.end());
+        high_resolution_clock::time_point tf = high_resolution_clock::now();
+        long long tiempoOrdenamiento = duration_cast<nanoseconds>(tf - ti).count();
+        cout << "Tiempo de ordenamiento: " << tiempoOrdenamiento << " ns\n";
 
-        long long tiempoOrdenamiento = duration_cast<nanoseconds>(finOrdenamiento - inicioOrdenamiento).count();
+        vector<pair<string, long long> > objetivos;
+        objetivos.push_back(make_pair(string("inicio"), muestra.front()));
+        objetivos.push_back(make_pair(string("centro"), muestra[muestra.size() / 2]));
+        objetivos.push_back(make_pair(string("final"), muestra.back()));
+        objetivos.push_back(make_pair(string("ausente"), maximoGlobal + 1));
 
-        cout << "Tiempo de ordenamiento: " << tiempoOrdenamiento << " ns" << endl;
+        for (size_t idxObj = 0; idxObj < objetivos.size(); idxObj++) {
+            string nombre = objetivos[idxObj].first;
+            long long objetivo = objetivos[idxObj].second;
 
-        for (auto& objetivoPar : objetivos) {
-            const string& nombreObjetivo = objetivoPar.first;
-            double objetivo = objetivoPar.second;
+            for (int alg = 0; alg <= 1; alg++) {
+                string nombreAlg = (alg == 0) ? "Lineal" : "Binaria";
+                const vector<long long>& base = (alg == 0) ? muestra : ordenada;
 
-            cout << "\n----------------------------------------------" << endl;
-            cout << "Objetivo: " << nombreObjetivo << endl;
-            cout << "CustomerID: " << objetivo << endl;
-            cout << "----------------------------------------------" << endl;
+                Medicion med = correrRepeticiones(alg, base, objetivo, repeticiones);
 
-            // ==================== BUSQUEDA LINEAL ====================
-            vector<long long> tiemposLineal;
-            vector<long long> comparacionesLineal;
+                for (int r = 0; r < repeticiones; r++) {
+                    crudos << n << "," << nombre << "," << objetivo << "," << nombreAlg << ","
+                           << med.tiempos[r] << "," << med.comparaciones[r] << "\n";
+                }
 
-            for (int repeticion = 1; repeticion <= repeticiones; repeticion++) {
-                auto inicio = high_resolution_clock::now();
-                pair<long long, long long> resultado = busquedaLineal(muestra, objetivo);
-                auto fin = high_resolution_clock::now();
+                resumen << n << "," << nombre << "," << objetivo << "," << nombreAlg << ","
+                        << media(med.tiempos) << "," << mediana(med.tiempos) << ","
+                        << *min_element(med.tiempos.begin(), med.tiempos.end()) << ","
+                        << *max_element(med.tiempos.begin(), med.tiempos.end()) << ","
+                        << media(med.comparaciones) << "," << mediana(med.comparaciones) << ","
+                        << *min_element(med.comparaciones.begin(), med.comparaciones.end()) << ","
+                        << *max_element(med.comparaciones.begin(), med.comparaciones.end()) << ","
+                        << (alg == 1 ? tiempoOrdenamiento : 0) << "\n";
 
-                long long tiempo = duration_cast<nanoseconds>(fin - inicio).count();
-
-                tiemposLineal.push_back(tiempo);
-                comparacionesLineal.push_back(resultado.second);
-
-                datosCrudos.push_back({
-                    n, nombreObjetivo, objetivo, "Lineal", repeticion,
-                    resultado.first, resultado.second, tiempo
-                });
+                cout << nombreAlg << " (" << nombre << "): prom_comp=" << media(med.comparaciones)
+                     << " prom_tiempo_ns=" << media(med.tiempos) << "\n";
             }
-
-            double promedioTiempoLineal = media(tiemposLineal);
-            double medianaTiempoLineal = mediana(tiemposLineal);
-            long long minimoTiempoLineal = minimo(tiemposLineal);
-            long long maximoTiempoLineal = maximo(tiemposLineal);
-
-            double promedioComparacionesLineal = media(comparacionesLineal);
-            double medianaComparacionesLineal = mediana(comparacionesLineal);
-            long long minimoComparacionesLineal = minimo(comparacionesLineal);
-            long long maximoComparacionesLineal = maximo(comparacionesLineal);
-
-            resultados.push_back({
-                n, nombreObjetivo, objetivo, "Lineal",
-                promedioTiempoLineal, medianaTiempoLineal, minimoTiempoLineal, maximoTiempoLineal,
-                promedioComparacionesLineal, medianaComparacionesLineal,
-                minimoComparacionesLineal, maximoComparacionesLineal,
-                0
-            });
-
-            // ==================== BUSQUEDA BINARIA ====================
-            vector<long long> tiemposBinaria;
-            vector<long long> comparacionesBinaria;
-
-            for (int repeticion = 1; repeticion <= repeticiones; repeticion++) {
-                auto inicio = high_resolution_clock::now();
-                pair<long long, long long> resultado = busquedaBinaria(muestraOrdenada, objetivo);
-                auto fin = high_resolution_clock::now();
-
-                long long tiempo = duration_cast<nanoseconds>(fin - inicio).count();
-
-                tiemposBinaria.push_back(tiempo);
-                comparacionesBinaria.push_back(resultado.second);
-
-                datosCrudos.push_back({
-                    n, nombreObjetivo, objetivo, "Binaria", repeticion,
-                    resultado.first, resultado.second, tiempo
-                });
-            }
-
-            double promedioTiempoBinaria = media(tiemposBinaria);
-            double medianaTiempoBinaria = mediana(tiemposBinaria);
-            long long minimoTiempoBinaria = minimo(tiemposBinaria);
-            long long maximoTiempoBinaria = maximo(tiemposBinaria);
-
-            double promedioComparacionesBinaria = media(comparacionesBinaria);
-            double medianaComparacionesBinaria = mediana(comparacionesBinaria);
-            long long minimoComparacionesBinaria = minimo(comparacionesBinaria);
-            long long maximoComparacionesBinaria = maximo(comparacionesBinaria);
-
-            resultados.push_back({
-                n, nombreObjetivo, objetivo, "Binaria",
-                promedioTiempoBinaria, medianaTiempoBinaria, minimoTiempoBinaria, maximoTiempoBinaria,
-                promedioComparacionesBinaria, medianaComparacionesBinaria,
-                minimoComparacionesBinaria, maximoComparacionesBinaria,
-                tiempoOrdenamiento
-            });
-
-            // Mostrar resultados en pantalla (misma logica que el script original)
-            cout << "\nLINEAL" << endl;
-            cout << "Promedio comparaciones: " << promedioComparacionesLineal << endl;
-            cout << "Mediana comparaciones: " << medianaComparacionesLineal << endl;
-            cout << "Promedio tiempo: " << promedioTiempoLineal << " ns" << endl;
-            cout << "Mediana tiempo: " << medianaTiempoLineal << " ns" << endl;
-
-            cout << "\nBINARIA" << endl;
-            cout << "Promedio comparaciones: " << promedioComparacionesBinaria << endl;
-            cout << "Mediana comparaciones: " << medianaComparacionesBinaria << endl;
-            cout << "Promedio tiempo: " << promedioTiempoBinaria << " ns" << endl;
-            cout << "Mediana tiempo: " << medianaTiempoBinaria << " ns" << endl;
         }
     }
 
-    // ============================================================
-    // GUARDAR DATOS CRUDOS
-    // ============================================================
+    crudos.close();
+    resumen.close();
 
-    ofstream archivoCrudos("datos_crudos.csv");
-    archivoCrudos << "n,escenario,objetivo,algoritmo,repeticion,posicion,comparaciones,tiempo_ns\n";
-
-    for (const FilaCruda& f : datosCrudos) {
-        archivoCrudos << f.n << "," << f.escenario << "," << fixed << setprecision(1) << f.objetivo << ","
-                      << f.algoritmo << "," << f.repeticion << "," << f.posicion << ","
-                      << f.comparaciones << "," << f.tiempoNs << "\n";
-    }
-    archivoCrudos.close();
-
-    // ============================================================
-    // GUARDAR RESUMEN ESTADISTICO
-    // ============================================================
-
-    ofstream archivoResumen("resumen_estadistico.csv");
-    archivoResumen << "n,escenario,objetivo,algoritmo,promedio_tiempo_ns,mediana_tiempo_ns,"
-                   << "minimo_tiempo_ns,maximo_tiempo_ns,promedio_comparaciones,mediana_comparaciones,"
-                   << "minimo_comparaciones,maximo_comparaciones,tiempo_ordenamiento_ns\n";
-
-    for (const FilaResumen& f : resultados) {
-        archivoResumen << f.n << "," << f.escenario << "," << fixed << setprecision(1) << f.objetivo << ","
-                       << f.algoritmo << "," << f.promedioTiempoNs << "," << f.medianaTiempoNs << ","
-                       << f.minimoTiempoNs << "," << f.maximoTiempoNs << "," << f.promedioComparaciones << ","
-                       << f.medianaComparaciones << "," << f.minimoComparaciones << "," << f.maximoComparaciones
-                       << "," << f.tiempoOrdenamientoNs << "\n";
-    }
-    archivoResumen.close();
-
-    // ============================================================
-    // MOSTRAR TABLA FINAL
-    // ============================================================
-
-    cout << "\n\n==============================================" << endl;
-    cout << "           RESUMEN FINAL" << endl;
-    cout << "==============================================" << endl;
-
-    cout << left
-         << setw(8) << "n"
-         << setw(10) << "escenario"
-         << setw(12) << "algoritmo"
-         << setw(16) << "prom_tiempo_ns"
-         << setw(16) << "prom_compar."
-         << endl;
-
-    for (const FilaResumen& f : resultados) {
-        cout << left
-             << setw(8) << f.n
-             << setw(10) << f.escenario
-             << setw(12) << f.algoritmo
-             << setw(16) << f.promedioTiempoNs
-             << setw(16) << f.promedioComparaciones
-             << endl;
-    }
-
-    cout << "\n==============================================" << endl;
-    cout << "ARCHIVOS GENERADOS" << endl;
-    cout << "==============================================" << endl;
-    cout << "1. datos_crudos.csv" << endl;
-    cout << "2. resumen_estadistico.csv" << endl;
-
-    cout << "\nExperimento terminado correctamente." << endl;
-
+    cout << "\nArchivos generados: datos_crudos.csv, resumen_estadistico.csv\n";
     return 0;
 }
